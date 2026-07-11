@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
-import { companies, invoices, clients } from "@/lib/db/schema";
+import { companies, invoices, clients, paymentPromises } from "@/lib/db/schema";
 import { and, eq, isNull, desc } from "drizzle-orm";
+import { computeDSO } from "@/lib/dso";
 
 export async function getCompanyBySlug(slug: string) {
   const [company] = await db
@@ -80,9 +81,91 @@ export async function getInvoiceDetail(invoiceId: number) {
 }
 
 export async function getClientsForCompany(companyId: number) {
-  return db
+  const clientsList = await db
     .select()
     .from(clients)
     .where(eq(clients.companyId, companyId))
     .orderBy(clients.name);
+
+  const results = [];
+  for (const client of clientsList) {
+    const clientInvoices = await db
+      .select({
+        statutOdoo: invoices.statutOdoo,
+        statutPaiement: invoices.statutPaiement,
+        montantTtc: invoices.montantTtc,
+        dateFacturation: invoices.dateFacturation,
+      })
+      .from(invoices)
+      .where(and(eq(invoices.clientId, client.id), isNull(invoices.disappearedAt)));
+
+    const nonAnnulees = clientInvoices.filter((i) => i.statutOdoo !== "Annulé");
+    const totalImpaye = nonAnnulees
+      .filter(
+        (i) => i.statutPaiement === "Non payées" || i.statutPaiement === "Partiellement réglé"
+      )
+      .reduce((sum, i) => sum + Number(i.montantTtc), 0);
+
+    const dso = computeDSO(
+      clientInvoices.map((i) => ({
+        ...i,
+        montantTtc: Number(i.montantTtc),
+      }))
+    );
+
+    const [latestPromise] = await db
+      .select()
+      .from(paymentPromises)
+      .where(eq(paymentPromises.clientId, client.id))
+      .orderBy(desc(paymentPromises.dateEcheance))
+      .limit(1);
+
+    results.push({
+      ...client,
+      totalImpaye,
+      dso,
+      latestPromise: latestPromise ?? null,
+    });
+  }
+
+  return results;
+}
+
+export async function getClientDetail(clientId: number) {
+  const [client] = await db.select().from(clients).where(eq(clients.id, clientId)).limit(1);
+  if (!client) return null;
+
+  const clientInvoices = await db
+    .select()
+    .from(invoices)
+    .where(eq(invoices.clientId, clientId))
+    .orderBy(desc(invoices.dateFacturation));
+
+  const promises = await db
+    .select()
+    .from(paymentPromises)
+    .where(eq(paymentPromises.clientId, clientId))
+    .orderBy(desc(paymentPromises.dateEcheance));
+
+  const dso = computeDSO(
+    clientInvoices
+      .filter((i) => !i.disappearedAt)
+      .map((i) => ({
+        statutOdoo: i.statutOdoo,
+        statutPaiement: i.statutPaiement,
+        montantTtc: Number(i.montantTtc),
+        dateFacturation: i.dateFacturation,
+      }))
+  );
+
+  const totalImpaye = clientInvoices
+    .filter(
+      (i) =>
+        !i.disappearedAt &&
+        i.statutOdoo !== "Annulé" &&
+        (i.statutPaiement === "Non payées" || i.statutPaiement === "Partiellement réglé")
+    )
+    .reduce((sum, i) => sum + Number(i.montantTtc), 0);
+
+  return { client, invoices: clientInvoices, promises, dso, totalImpaye };
 }

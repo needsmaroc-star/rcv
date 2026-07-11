@@ -67,8 +67,10 @@ export const clients = pgTable(
     address: text("address"),
     phone: text("phone"),
     email: text("email"),
+    responsable: text("responsable"),
     commercial: text("commercial"),
     gestionnaire: text("gestionnaire"),
+    interventionPar: text("intervention_par"),
     plafond: numeric("plafond", { precision: 14, scale: 2 }),
     conditionsPaiement: text("conditions_paiement"),
 
@@ -138,6 +140,41 @@ export const invoices = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// PROMESSES DE PAIEMENT — rattachées au client, pas à une facture précise
+// ---------------------------------------------------------------------------
+export const PRODUITS = [
+  "Hébergement",
+  "Infogérence",
+  "Licence",
+  "Azure",
+  "AWS",
+] as const;
+
+export const PROMISE_STATUSES = [
+  "En attente",
+  "Respectée",
+  "Partiellement respectée",
+  "Non respectée",
+] as const;
+
+export const paymentPromises = pgTable("payment_promises", {
+  id: serial("id").primaryKey(),
+  clientId: integer("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  montantPromis: numeric("montant_promis", { precision: 14, scale: 2 }).notNull(),
+  dateEcheance: timestamp("date_echeance").notNull(),
+  statut: text("statut").notNull().default("En attente"),
+  produit: text("produit"), // Hébergement / Infogérence / Licence / Azure / AWS
+  commentaire: text("commentaire"),
+  createdBy: integer("created_by").references(() => users.id, {
+    onDelete: "set null",
+  }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// ---------------------------------------------------------------------------
 // COMMENTAIRES — chronologiques, jamais supprimés
 // ---------------------------------------------------------------------------
 export const invoiceComments = pgTable("invoice_comments", {
@@ -197,6 +234,18 @@ export const clientsRelations = relations(clients, ({ one, many }) => ({
     references: [companies.id],
   }),
   invoices: many(invoices),
+  promises: many(paymentPromises),
+}));
+
+export const paymentPromisesRelations = relations(paymentPromises, ({ one }) => ({
+  client: one(clients, {
+    fields: [paymentPromises.clientId],
+    references: [clients.id],
+  }),
+  createdByUser: one(users, {
+    fields: [paymentPromises.createdBy],
+    references: [users.id],
+  }),
 }));
 
 export const invoicesRelations = relations(invoices, ({ one, many }) => ({
