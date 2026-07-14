@@ -1,7 +1,8 @@
 import { db } from "@/lib/db";
-import { companies, invoices, clients, paymentPromises } from "@/lib/db/schema";
+import { companies, invoices, clients, paymentPromises, collectionActions } from "@/lib/db/schema";
 import { and, eq, isNull, desc } from "drizzle-orm";
 import { computeDSO } from "@/lib/dso";
+import { isFactureImpayee } from "@/lib/invoices";
 
 export async function getCompanyBySlug(slug: string) {
   const [company] = await db
@@ -23,21 +24,17 @@ export async function getDashboardStats(companyId: number) {
     .where(and(eq(invoices.companyId, companyId), isNull(invoices.disappearedAt)));
 
   const nonAnnulees = active.filter((i) => i.statutOdoo !== "Annulé");
-  const impayees = nonAnnulees.filter(
-    (i) => i.statutPaiement === "Non payées" || i.statutPaiement === "Partiellement réglé"
-  );
+
+  // Factures impayées == factures échues (voir lib/invoices.ts isFactureImpayee)
+  const impayees = active.filter(isFactureImpayee);
 
   const totalFacture = nonAnnulees.reduce((sum, i) => sum + Number(i.montantTtc), 0);
   const totalImpaye = impayees.reduce((sum, i) => sum + Number(i.montantTtc), 0);
-  const montantEchu = impayees
-    .filter((i) => (i.echeanceJours ?? 0) < 0)
-    .reduce((sum, i) => sum + Number(i.montantTtc), 0);
-  const montantNonEchu = totalImpaye - montantEchu;
+  const montantEchu = totalImpaye;
+  const montantNonEchu = 0;
 
-  const clientCount = await db
-    .select()
-    .from(clients)
-    .where(eq(clients.companyId, companyId));
+  // Nombre de clients : clients ayant au moins une facture impayée
+  const clientIdsImpayees = new Set(impayees.map((i) => i.clientId));
 
   return {
     totalFacture,
@@ -45,8 +42,9 @@ export async function getDashboardStats(companyId: number) {
     montantEchu,
     montantNonEchu,
     nombreFactures: nonAnnulees.length,
-    nombreClients: clientCount.length,
+    nombreClients: clientIdsImpayees.size,
     nombreImpayees: impayees.length,
+    nombreEchues: impayees.length,
   };
 }
 
@@ -95,16 +93,14 @@ export async function getClientsForCompany(companyId: number) {
         statutPaiement: invoices.statutPaiement,
         montantTtc: invoices.montantTtc,
         dateFacturation: invoices.dateFacturation,
+        echeanceJours: invoices.echeanceJours,
       })
       .from(invoices)
       .where(and(eq(invoices.clientId, client.id), isNull(invoices.disappearedAt)));
 
-    const nonAnnulees = clientInvoices.filter((i) => i.statutOdoo !== "Annulé");
-    const totalImpaye = nonAnnulees
-      .filter(
-        (i) => i.statutPaiement === "Non payées" || i.statutPaiement === "Partiellement réglé"
-      )
-      .reduce((sum, i) => sum + Number(i.montantTtc), 0);
+    const impayeesClient = clientInvoices.filter(isFactureImpayee);
+    const totalImpaye = impayeesClient.reduce((sum, i) => sum + Number(i.montantTtc), 0);
+    const montantEchu = totalImpaye;
 
     const dso = computeDSO(
       clientInvoices.map((i) => ({
@@ -120,11 +116,20 @@ export async function getClientsForCompany(companyId: number) {
       .orderBy(desc(paymentPromises.dateEcheance))
       .limit(1);
 
+    const [lastAction] = await db
+      .select()
+      .from(collectionActions)
+      .where(eq(collectionActions.clientId, client.id))
+      .orderBy(desc(collectionActions.actionDate))
+      .limit(1);
+
     results.push({
       ...client,
       totalImpaye,
+      montantEchu,
       dso,
       latestPromise: latestPromise ?? null,
+      lastAction: lastAction ?? null,
     });
   }
 
@@ -155,16 +160,12 @@ export async function getClientDetail(clientId: number) {
         statutPaiement: i.statutPaiement,
         montantTtc: Number(i.montantTtc),
         dateFacturation: i.dateFacturation,
+        echeanceJours: i.echeanceJours,
       }))
   );
 
   const totalImpaye = clientInvoices
-    .filter(
-      (i) =>
-        !i.disappearedAt &&
-        i.statutOdoo !== "Annulé" &&
-        (i.statutPaiement === "Non payées" || i.statutPaiement === "Partiellement réglé")
-    )
+    .filter((i) => !i.disappearedAt && isFactureImpayee(i))
     .reduce((sum, i) => sum + Number(i.montantTtc), 0);
 
   return { client, invoices: clientInvoices, promises, dso, totalImpaye };

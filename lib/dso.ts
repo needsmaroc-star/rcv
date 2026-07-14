@@ -1,9 +1,12 @@
+import { isFactureImpayee } from "@/lib/invoices";
+
 /**
  * Calcul du DSO (Days Sales Outstanding / Délai moyen de recouvrement).
  *
  * Règle demandée : seules les factures au statut Odoo "Comptabilisé" sont
- * prises en compte. Les brouillons et les factures annulées sont exclues,
- * aussi bien du chiffre d'affaires que de l'impayé.
+ * prises en compte pour le chiffre d'affaires. Les brouillons et les
+ * factures annulées sont exclus. L'impayé utilise la définition centrale
+ * `isFactureImpayee` (voir lib/invoices.ts).
  *
  * Formule utilisée : DSO = (Total impayé / Total facturé) × nombre de jours
  * de la période couverte par les factures considérées (au minimum 30 jours,
@@ -15,6 +18,7 @@ export interface DsoInvoiceInput {
   statutPaiement: string;
   montantTtc: number;
   dateFacturation: Date | null;
+  echeanceJours: number | null;
 }
 
 export function computeDSO(invoicesInput: DsoInvoiceInput[]): number {
@@ -27,11 +31,7 @@ export function computeDSO(invoicesInput: DsoInvoiceInput[]): number {
   if (totalCA === 0) return 0;
 
   const totalImpaye = comptabilisees
-    .filter(
-      (i) =>
-        i.statutPaiement === "Non payées" ||
-        i.statutPaiement === "Partiellement réglé"
-    )
+    .filter(isFactureImpayee)
     .reduce((sum, i) => sum + i.montantTtc, 0);
 
   const dates = comptabilisees

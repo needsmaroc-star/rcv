@@ -15,6 +15,13 @@
       "when": 1783781059977,
       "tag": "0001_shiny_selene",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784609999999,
+      "tag": "0002_curly_sunspot",
+      "breakpoints": true
     }
   ]
 }

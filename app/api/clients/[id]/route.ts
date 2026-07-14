@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { clients } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 
-const ALLOWED_FIELDS = ["responsable", "commercial", "interventionPar"] as const;
+const ALLOWED_FIELDS = ["responsable", "commercial", "interventionPar", "blocage"] as const;
 type AllowedField = (typeof ALLOWED_FIELDS)[number];
 
 export async function PATCH(

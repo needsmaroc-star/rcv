@@ -73,6 +73,7 @@ export const clients = pgTable(
     interventionPar: text("intervention_par"),
     plafond: numeric("plafond", { precision: 14, scale: 2 }),
     conditionsPaiement: text("conditions_paiement"),
+    blocage: text("blocage").notNull().default("Sans blocage"),
 
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -157,6 +158,29 @@ export const PROMISE_STATUSES = [
   "Non respectée",
 ] as const;
 
+// ---------------------------------------------------------------------------
+// BLOCAGES — motif de blocage d'un client
+// ---------------------------------------------------------------------------
+export const BLOCAGE_TYPES = [
+  "Facturation",
+  "Lettrage",
+  "Chef de projet",
+  "Sales",
+  "Sans blocage",
+] as const;
+
+// ---------------------------------------------------------------------------
+// ACTIONS DE RECOUVREMENT — étapes de relance disponibles
+// ---------------------------------------------------------------------------
+export const COLLECTION_ACTION_TYPES = [
+  "Relance 1",
+  "Relance 2",
+  "Relance 3",
+  "Avertissement 1",
+  "Avertissement 2",
+  "Avis de coupure",
+] as const;
+
 export const paymentPromises = pgTable("payment_promises", {
   id: serial("id").primaryKey(),
   clientId: integer("client_id")
@@ -164,7 +188,10 @@ export const paymentPromises = pgTable("payment_promises", {
     .references(() => clients.id, { onDelete: "cascade" }),
   montantPromis: numeric("montant_promis", { precision: 14, scale: 2 }).notNull(),
   dateEcheance: timestamp("date_echeance").notNull(),
-  statut: text("statut").notNull().default("En attente"),
+  statut: text("statut").notNull().default("En attente"), // déprécié : le statut est désormais calculé (voir lib/promise.ts)
+  // Montant impayé du client au moment de la création de la promesse — sert de référence
+  // pour calculer automatiquement si la promesse a été (partiellement) tenue.
+  montantImpayeInitial: numeric("montant_impaye_initial", { precision: 14, scale: 2 }),
   produit: text("produit"), // Hébergement / Infogérence / Licence / Azure / AWS
   commentaire: text("commentaire"),
   createdBy: integer("created_by").references(() => users.id, {
@@ -172,6 +199,25 @@ export const paymentPromises = pgTable("payment_promises", {
   }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// ---------------------------------------------------------------------------
+// ACTIONS DE RECOUVREMENT — historique des relances/avertissements par client
+// (rattachées au client, pas à une facture précise, comme les promesses)
+// ---------------------------------------------------------------------------
+export const collectionActions = pgTable("collection_actions", {
+  id: serial("id").primaryKey(),
+  clientId: integer("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  type: text("type").notNull(), // Relance 1/2/3, Avertissement 1/2, Avis de coupure
+  actionDate: timestamp("action_date").defaultNow().notNull(),
+  coupureDeadline: timestamp("coupure_deadline"), // délai avant coupure ("Avis de coupure" uniquement)
+  comment: text("comment"),
+  createdBy: integer("created_by").references(() => users.id, {
+    onDelete: "set null",
+  }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 // ---------------------------------------------------------------------------
@@ -235,6 +281,7 @@ export const clientsRelations = relations(clients, ({ one, many }) => ({
   }),
   invoices: many(invoices),
   promises: many(paymentPromises),
+  collectionActions: many(collectionActions),
 }));
 
 export const paymentPromisesRelations = relations(paymentPromises, ({ one }) => ({
@@ -244,6 +291,17 @@ export const paymentPromisesRelations = relations(paymentPromises, ({ one }) => 
   }),
   createdByUser: one(users, {
     fields: [paymentPromises.createdBy],
+    references: [users.id],
+  }),
+}));
+
+export const collectionActionsRelations = relations(collectionActions, ({ one }) => ({
+  client: one(clients, {
+    fields: [collectionActions.clientId],
+    references: [clients.id],
+  }),
+  createdByUser: one(users, {
+    fields: [collectionActions.createdBy],
     references: [users.id],
   }),
 }));
